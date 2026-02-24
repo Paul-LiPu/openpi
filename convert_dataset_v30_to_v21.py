@@ -144,6 +144,14 @@ def read_tasks_v30(root: Path, episodes_df: pd.DataFrame | None = None, info: di
         if inferred:
             return inferred
 
+    if "task_index" in df.columns:
+        # Some v3 datasets only store task indices. Synthesize stable names so v2.1 metadata is valid.
+        task_ids = sorted({int(v) for v in df["task_index"].dropna().tolist()})
+        logging.warning(
+            "No task text found in v3 metadata; synthesizing %d task names from task_index values.", len(task_ids)
+        )
+        return [{"task_index": task_id, "task": f"task_{task_id}"} for task_id in task_ids]
+
     raise ValueError(f"Unexpected tasks schema at {tasks_path}: columns={list(df.columns)}")
 
 
@@ -197,20 +205,30 @@ def unflatten_stats_record(flat_record: dict[str, Any]) -> dict[str, Any]:
     return nested.get("stats", {})
 
 
-def build_legacy_episodes_jsonl(episodes_df: pd.DataFrame) -> list[dict[str, Any]]:
-    required = {"episode_index", "tasks", "length"}
+def build_legacy_episodes_jsonl(episodes_df: pd.DataFrame, task_map: dict[int, str] | None = None) -> list[dict[str, Any]]:
+    required = {"episode_index", "length"}
     missing = required - set(episodes_df.columns)
     if missing:
         raise ValueError(f"Episodes metadata missing required columns for v2.1: {sorted(missing)}")
 
+    can_use_tasks = "tasks" in episodes_df.columns
+    can_use_task_index = "task_index" in episodes_df.columns and task_map is not None
+    if not can_use_tasks and not can_use_task_index:
+        raise ValueError("Episodes metadata missing both `tasks` and (`task_index` + task_map`) for v2.1 conversion")
+
     rows = []
-    for r in episodes_df[["episode_index", "tasks", "length"]].itertuples(index=False):
-        tasks = list(r.tasks) if isinstance(r.tasks, (list, tuple)) else [r.tasks]
+    for _, row in episodes_df.iterrows():
+        if can_use_tasks:
+            tasks_val = row["tasks"]
+            tasks = list(tasks_val) if isinstance(tasks_val, (list, tuple)) else [tasks_val]
+        else:
+            task_idx = int(row["task_index"])
+            tasks = [task_map.get(task_idx, f"task_{task_idx}")]
         rows.append(
             {
-                "episode_index": int(r.episode_index),
+                "episode_index": int(row["episode_index"]),
                 "tasks": [str(t) for t in tasks],
-                "length": int(r.length),
+                "length": int(row["length"]),
             }
         )
     return rows
@@ -381,8 +399,9 @@ def convert_dataset(repo_id: str, root: str | Path | None = None, force: bool = 
     tasks = read_tasks_v30(dataset_root, episodes_df=episodes_df, info=info_v30)
 
     logging.info("Converting tasks.jsonl / episodes.jsonl / episodes_stats.jsonl")
+    task_map = {int(item["task_index"]): str(item["task"]) for item in tasks}
     write_jsonlines(new_root / "meta" / "tasks.jsonl", tasks)
-    write_jsonlines(new_root / "meta" / "episodes.jsonl", build_legacy_episodes_jsonl(episodes_df))
+    write_jsonlines(new_root / "meta" / "episodes.jsonl", build_legacy_episodes_jsonl(episodes_df, task_map=task_map))
     write_jsonlines(
         new_root / "meta" / "episodes_stats.jsonl",
         build_legacy_episode_stats_jsonl(episodes_df, episodes_stats_df),
