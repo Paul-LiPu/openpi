@@ -257,9 +257,10 @@ def _normalize_stats_for_v21(stats: dict[str, Any], info: dict[str, Any] | None)
         feature_stats = stats.get(key)
         if not isinstance(feature_stats, dict):
             continue
-        for stat_name in ("min", "max", "mean", "std"):
-            if stat_name in feature_stats:
-                feature_stats[stat_name] = _normalize_image_stat_shape_3x1x1(feature_stats[stat_name])
+        for stat_name, stat_value in list(feature_stats.items()):
+            if stat_name == "count":
+                continue
+            feature_stats[stat_name] = _normalize_image_stat_shape_3x1x1(stat_value)
     return stats
 
 
