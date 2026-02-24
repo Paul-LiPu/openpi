@@ -2,6 +2,7 @@ from collections.abc import Iterator, Sequence
 import logging
 import multiprocessing
 import os
+import pathlib
 import typing
 from typing import Literal, Protocol, SupportsIndex, TypeVar
 
@@ -137,9 +138,24 @@ def create_torch_dataset(
     if repo_id == "fake":
         return FakeDataset(model_config, num_samples=1024)
 
-    dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
+    # Support local filesystem datasets in addition to Hugging Face repo ids.
+    # LeRobot's API accepts a separate `root` path, but this repo historically passed `repo_id` only.
+    # When a filesystem path is passed as `repo_id`, older behavior can fall back to Hugging Face API
+    # validation and fail. We avoid that by splitting a valid synthetic repo id from the local root path.
+    dataset_root = None
+    dataset_repo_id = repo_id
+    repo_path = pathlib.Path(repo_id).expanduser()
+    if repo_path.is_absolute() or repo_id.startswith("./") or repo_id.startswith("../"):
+        dataset_root = repo_path.resolve()
+        dataset_repo_id = f"local/{dataset_root.name}"
+    elif pathlib.Path(repo_id).exists():
+        dataset_root = pathlib.Path(repo_id).resolve()
+        dataset_repo_id = f"local/{dataset_root.name}"
+
+    dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(dataset_repo_id, root=dataset_root)
     dataset = lerobot_dataset.LeRobotDataset(
-        data_config.repo_id,
+        dataset_repo_id,
+        root=dataset_root,
         delta_timestamps={
             key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
         },
