@@ -91,15 +91,60 @@ def episode_video_path(root: Path, ep_idx: int, camera: str) -> Path:
     return root / "videos" / episode_chunk_dir(ep_idx) / camera / f"episode_{ep_idx:06d}.mp4"
 
 
-def read_tasks_v30(root: Path) -> list[dict[str, Any]]:
+def _infer_tasks_from_episodes(episodes_df: pd.DataFrame) -> list[dict[str, Any]]:
+    if "task_index" not in episodes_df.columns:
+        return []
+
+    if "task" in episodes_df.columns:
+        df = episodes_df[["task_index", "task"]].dropna().drop_duplicates().sort_values("task_index")
+        return [{"task_index": int(r.task_index), "task": str(r.task)} for r in df.itertuples(index=False)]
+
+    if "tasks" in episodes_df.columns:
+        # Legacy-style episodes metadata may carry `tasks` as a list per episode. Build a stable mapping.
+        task_map: dict[int, str] = {}
+        for _, row in episodes_df[["task_index", "tasks"]].dropna().iterrows():
+            task_idx = int(row["task_index"])
+            tasks_val = row["tasks"]
+            if isinstance(tasks_val, (list, tuple)) and tasks_val:
+                task_map.setdefault(task_idx, str(tasks_val[0]))
+            elif isinstance(tasks_val, str) and tasks_val:
+                task_map.setdefault(task_idx, tasks_val)
+        return [{"task_index": k, "task": v} for k, v in sorted(task_map.items())]
+
+    return []
+
+
+def _infer_tasks_from_info(info: dict[str, Any]) -> list[dict[str, Any]]:
+    features = info.get("features", {})
+    task_index_ft = features.get("task_index", {})
+    names = task_index_ft.get("names")
+    if isinstance(names, dict):
+        return [{"task_index": int(k), "task": str(v)} for k, v in sorted(names.items(), key=lambda kv: int(kv[0]))]
+    if isinstance(names, list):
+        return [{"task_index": i, "task": str(v)} for i, v in enumerate(names)]
+    return []
+
+
+def read_tasks_v30(root: Path, episodes_df: pd.DataFrame | None = None, info: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     tasks_path = root / "meta" / "tasks"
     if not tasks_path.exists():
         tasks_path = root / "meta" / "tasks.parquet"
     df = load_parquet_tree(tasks_path)
-    if "task_index" not in df.columns or "task" not in df.columns:
-        raise ValueError(f"Unexpected tasks schema at {tasks_path}: columns={list(df.columns)}")
-    df = df[["task_index", "task"]].drop_duplicates().sort_values("task_index")
-    return [{"task_index": int(r.task_index), "task": str(r.task)} for r in df.itertuples(index=False)]
+    if "task_index" in df.columns and "task" in df.columns:
+        df = df[["task_index", "task"]].drop_duplicates().sort_values("task_index")
+        return [{"task_index": int(r.task_index), "task": str(r.task)} for r in df.itertuples(index=False)]
+
+    if "task_index" in df.columns and episodes_df is not None:
+        inferred = _infer_tasks_from_episodes(episodes_df)
+        if inferred:
+            return inferred
+
+    if "task_index" in df.columns and info is not None:
+        inferred = _infer_tasks_from_info(info)
+        if inferred:
+            return inferred
+
+    raise ValueError(f"Unexpected tasks schema at {tasks_path}: columns={list(df.columns)}")
 
 
 def read_episodes_v30(root: Path) -> pd.DataFrame:
@@ -331,9 +376,9 @@ def convert_dataset(repo_id: str, root: str | Path | None = None, force: bool = 
         shutil.rmtree(new_root)
 
     logging.info("Reading v3 metadata from %s", dataset_root)
-    tasks = read_tasks_v30(dataset_root)
     episodes_df = read_episodes_v30(dataset_root)
     episodes_stats_df = read_episodes_stats_v30(dataset_root)
+    tasks = read_tasks_v30(dataset_root, episodes_df=episodes_df, info=info_v30)
 
     logging.info("Converting tasks.jsonl / episodes.jsonl / episodes_stats.jsonl")
     write_jsonlines(new_root / "meta" / "tasks.jsonl", tasks)
