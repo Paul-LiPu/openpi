@@ -28,6 +28,7 @@ set -euo pipefail
 #   EXP_NAME=my_yellow_cube_lora \
 #   XLA_MEM_FRACTION=0.9 \
 #   VENV_DIR=.venv \
+#   INSTALL_SYSTEM_DEPS=1 \
 #   STATE_FILE=.openpi-train-state \
 #   RESET_STATE=1 \
 #   ./train.sh
@@ -44,6 +45,7 @@ LOG_INTERVAL="${LOG_INTERVAL:-10}"
 SAVE_INTERVAL="${SAVE_INTERVAL:-100}"
 KEEP_PERIOD="${KEEP_PERIOD:-2500}"
 VENV_DIR="${VENV_DIR:-.venv}"
+INSTALL_SYSTEM_DEPS="${INSTALL_SYSTEM_DEPS:-1}"
 CALLER_DIR="${PWD}"
 STATE_FILE="${STATE_FILE:-${CALLER_DIR}/.${REPO_DIR}.train_state}"
 RESET_STATE="${RESET_STATE:-0}"
@@ -111,6 +113,30 @@ setup_python_venv_step() {
   uv venv --python 3.11 "${VENV_DIR}"
 }
 
+install_system_deps_step() {
+  if [[ "${INSTALL_SYSTEM_DEPS}" != "1" ]]; then
+    echo "Skipping system dependency install (INSTALL_SYSTEM_DEPS=${INSTALL_SYSTEM_DEPS})."
+    return 0
+  fi
+  if ! command -v apt-get >/dev/null 2>&1; then
+    echo "apt-get not found. Please install PyAV/ffmpeg build deps manually (pkg-config, ffmpeg, ffmpeg dev libs, build-essential)."
+    return 1
+  fi
+  apt-get update
+  apt-get install -y \
+    pkg-config \
+    ffmpeg \
+    build-essential \
+    python3-dev \
+    libavformat-dev \
+    libavcodec-dev \
+    libavdevice-dev \
+    libavutil-dev \
+    libavfilter-dev \
+    libswscale-dev \
+    libswresample-dev
+}
+
 run_step "clone_repo" "Clone repo: ${REPO_URL}" clone_repo_step
 
 cd "${REPO_DIR}"
@@ -121,6 +147,7 @@ run_step "install_git_xet" "Install git-xet (required for Hugging Face git-xet r
   bash -lc 'curl -sSfL https://hf.co/git-xet/install.sh | sh'
 
 run_step "clone_dataset" "Clone yellow-cube dataset into data/${DATASET_DIR_NAME}" clone_dataset_step
+run_step "install_system_deps" "Install system dependencies for PyAV/ffmpeg builds (apt)" install_system_deps_step
 run_step "setup_python_venv" "Create local Python 3.11 virtualenv at ${VENV_DIR}" setup_python_venv_step
 
 # Ensure subsequent uv commands use the local project venv instead of a caller-provided system/managed venv.
