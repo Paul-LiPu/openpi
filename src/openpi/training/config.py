@@ -20,6 +20,8 @@ import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
+import openpi.policies.livenex_policy as livenex_policy
+import openpi.policies.so101_policy as so101_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
@@ -356,6 +358,97 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class LeRobotLivenexDataConfig(DataConfigFactory):
+    """
+    Data config for the Livenex dataset with Lebai robot.
+    This dataset has 7D state (6D TCP pose + gripper) and 7D actions (6D TCP deltas + gripper delta).
+    """
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # Repack transform to match keys from dataset to inference keys
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "observation/image": "image",
+                        "observation/wrist_image": "wrist_image",
+                        "observation/top_image": "top_image",
+                        "observation/state": "state",
+                        "actions": "actions",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+
+        # Data transforms for converting dataset format to model format
+        data_transforms = _transforms.Group(
+            inputs=[livenex_policy.LivenexInputs(model_type=model_config.model_type)],
+            outputs=[livenex_policy.LivenexOutputs()],
+        )
+
+        # Model transforms (tokenization, etc.)
+        model_transforms = ModelTransformFactory()(model_config)
+
+        # Return all data transforms for training and inference
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotSO101DataConfig(DataConfigFactory):
+    """Data config for a local LeRobot SO101-style dataset (yellow-cube pick/place)."""
+
+    # Optional prompt fallback for users who disable prompt_from_task and add a custom prompt later.
+    # Note: the default training config below uses prompt_from_task=True.
+    default_prompt: str | None = None
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "observation/top_image": "observation.images.top",
+                        "observation/wrist_image": "observation.images.wrist",
+                        "observation/state": "observation.state",
+                        "actions": "action",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[so101_policy.SO101Inputs(model_type=model_config.model_type)],
+            outputs=[so101_policy.SO101Outputs()],
+        )
+
+        # Dataset actions are absolute joint positions; convert the first 5 joints to deltas and
+        # keep the gripper (dim 6) absolute to match common pi fine-tuning conventions.
+        delta_action_mask = _transforms.make_bool_mask(5, -1)
+        data_transforms = data_transforms.push(
+            inputs=[_transforms.DeltaActions(delta_action_mask)],
+            outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+        )
+
+        model_transforms = ModelTransformFactory(default_prompt=self.default_prompt)(model_config)
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            action_sequence_keys=("action",),
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class RLDSDroidDataConfig(DataConfigFactory):
     """
     Config for training on DROID, using RLDS data format (for efficient training on larger datasets).
@@ -367,7 +460,6 @@ class RLDSDroidDataConfig(DataConfigFactory):
     # Filtering options. Can pass a path to a dictionary that maps episodes to timestep ranges
     # to tuples denoting ranges of time steps to keep (start, end). Episodes are uniquely identified with
     # f"{recording_folderpath}--{file_path}", both of which are present in the RLDS episode metadata.
-
     # List of datasets to sample from: name, version, weight, and optionally filter_dict_path
     datasets: Sequence[droid_rlds_dataset.RLDSDataset] = (
         droid_rlds_dataset.RLDSDataset(
@@ -660,6 +752,7 @@ _CONFIGS = [
         # Also modify the DataConfig to use the new config you made for your dataset above.
         data=LeRobotLiberoDataConfig(
             repo_id="physical-intelligence/libero",
+            # repo_id="your_hf_username/libero",
             base_config=DataConfig(
                 # This flag determines whether we load the prompt (i.e. the task instruction) from the
                 # ``task`` field in the LeRobot dataset. If set to True, the prompt will show up in
@@ -760,6 +853,144 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         pytorch_weight_path="/path/to/your/pytorch_weight_path",
         num_train_steps=30_000,
+    ),
+    #
+    # Fine-tuning Livenex configs.
+    #
+    TrainConfig(
+        name="pi05_livenex_low_mem_finetune",
+        # Pi0.5 model with LoRA fine-tuning for memory efficiency
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora"
+        ),
+        # Freeze filter for LoRA fine-tuning - MUST include pi05=True to match model!
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,  # ← CRITICAL: Must match model config!
+            action_horizon=10,
+            discrete_state_input=False,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora"
+        ).get_freeze_filter(),
+        # Livenex dataset configuration
+        data=LeRobotLivenexDataConfig(
+            repo_id="your_hf_username/livenex_move_object",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=16,  # Restored to reasonable batch size now that EMA is off
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=400,
+            peak_lr=2.5e-5,  # Lower LR for LoRA (like pi0)
+            decay_steps=10_000,
+            decay_lr=2.5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,  # Turn off EMA for LoRA fine-tuning (saves ~50% memory!)
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=10_000,
+    ),
+    TrainConfig(
+        name="pi0_livenex_low_mem_finetune",
+        # Pi0 model with LoRA fine-tuning for memory efficiency
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"),
+        # Livenex dataset configuration
+        data=LeRobotLivenexDataConfig(
+            repo_id="your_hf_username/livenex_move_object",
+            base_config=DataConfig(
+                # Load prompts from the task field in the dataset
+                prompt_from_task=True,
+            ),
+        ),
+        # Load pi0 base model checkpoint
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+        num_train_steps=10_000,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=400,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,  # ← Match num_train_steps
+            decay_lr=2.5e-6,
+        ),
+        # warmup_steps: int = 1_000         # Default: 1,000 steps
+        #       peak_lr: float = 2.5e-5           # Default: 0.000025
+        #       decay_steps: int = 30_000         # Default: 30,000 steps
+        #       decay_lr: float = 2.5e-6          # Default: 0.0000025
+        # Freeze filter for LoRA fine-tuning
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+        ).get_freeze_filter(),
+        # Turn off EMA for LoRA fine-tuning
+        ema_decay=None,
+    ),
+    TrainConfig(
+        name="pi05_so101_low_mem_finetune",
+        # Pi0.5 LoRA fine-tuning on a local LeRobot SO101/yellow-cube dataset.
+        # Workflow:
+        #   uv run scripts/compute_norm_stats.py --config-name pi05_so101_low_mem_finetune
+        #   uv run scripts/train.py pi05_so101_low_mem_finetune --exp-name=<name>
+        #   uv run scripts/serve_policy.py policy:checkpoint --policy.config=pi05_so101_low_mem_finetune --policy.dir=<ckpt_dir>
+        # Known limitations:
+        # - Only two cameras are present in the dataset; the SO101 adapter duplicates the top camera into the third slot.
+        # - Prompts default to LeRobot task metadata (`prompt_from_task=True`) for this config.
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        data=LeRobotSO101DataConfig(
+            repo_id="data/pick-place-yellow_cube",
+            base_config=DataConfig(prompt_from_task=True),
+            default_prompt="pick up the yellow cube and place it",
+        ),
+        batch_size=128,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=400,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,
+            decay_lr=2.5e-5,  # constant LR after warmup (no decay)
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=10_000,
+    ),
+    TrainConfig(
+        name="pi05_so101_finetune",
+        # Pi0.5 full-parameter fine-tuning on a local LeRobot SO101/yellow-cube dataset.
+        # Uses the same SO101 data adapter/config as the low-memory (LoRA) variant, but trains the full model.
+        # Hyperparameters below follow the pi05_libero full-finetune config pattern.
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+        ),
+        data=LeRobotSO101DataConfig(
+            repo_id="data/pick-place-yellow_cube",
+            base_config=DataConfig(prompt_from_task=True),
+            default_prompt="pick up the yellow cube and place it",
+        ),
+        batch_size=32,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=10_000,
     ),
     #
     # Fine-tuning Aloha configs.
@@ -965,7 +1196,9 @@ _CONFIGS = [
         exp_name="debug_pi05",
         wandb_enabled=False,
     ),
+    #
     # RoboArena & PolaRiS configs.
+    #
     *roboarena_config.get_roboarena_configs(),
     *polaris_config.get_polaris_configs(),
 ]

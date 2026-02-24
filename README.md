@@ -47,6 +47,7 @@ We use [uv](https://docs.astral.sh/uv/) to manage Python dependencies. See the [
 ```bash
 GIT_LFS_SKIP_SMUDGE=1 uv sync
 GIT_LFS_SKIP_SMUDGE=1 uv pip install -e .
+GIT_LFS_SKIP_SMUDGE=1 uv pip install -e . --group rlds --group dev
 ```
 
 NOTE: `GIT_LFS_SKIP_SMUDGE=1` is needed to pull LeRobot as a dependency.
@@ -321,3 +322,25 @@ We will collect common issues and their solutions here. If you encounter an issu
 | Import errors when running examples       | Make sure you've installed all dependencies with `uv sync`. Some examples may have additional requirements listed in their READMEs.                    |
 | Action dimensions mismatch                | Verify your data processing transforms match the expected input/output dimensions of your robot. Check the action space definitions in your policy classes.                                  |
 | Diverging training loss                            | Check the `q01`, `q99`, and `std` values in `norm_stats.json` for your dataset. Certain dimensions that are rarely used can end up with very small `q01`, `q99`, or `std` values, leading to huge states and actions after normalization. You can manually adjust the norm stats as a workaround. |
+
+## Robot Platform Comparison
+
+This table summarizes the state and action specifications for different robot platforms supported by OpenPI examples:
+
+| Robot Platform | State Dim | State Composition | Action Dim | Action Composition | Cameras | Control Space | Example Config |
+|----------------|-----------|-------------------|------------|-------------------|---------|---------------|----------------|
+| **ALOHA** | 14D | 6D left arm joints + 1D left gripper + 6D right arm joints + 1D right gripper | 14D | 6D left arm joints + 1D left gripper + 6D right arm joints + 1D right gripper | 4 (cam_high, cam_low, cam_left_wrist, cam_right_wrist) | Joint space (bi-manual, absolute positions) | `pi0_aloha` |
+| **LIBERO** | 8D | 3D EEF position + 3D EEF orientation (axis-angle) + 2D gripper joints | 7D | 6D EEF deltas (position + orientation) + 1D gripper | 2 (agentview, wrist) | Task space (EEF deltas) | `pi05_libero` |
+| **UR5** | 7D | 6D joint positions + 1D gripper | 7D | 6D joint deltas + 1D gripper (absolute) | 2 (base, wrist) + 1 placeholder | Joint space (deltas) | `pi0_ur5` |
+| **DROID** | 8D | 7D joint positions + 1D gripper | 8D | 7D joint deltas + 1D gripper (absolute) | 2 (exterior, wrist) | Joint space (deltas) | `pi05_droid` |
+
+**Notes:**
+- **ALOHA** is bi-manual (two arms), resulting in 2x the state/action dimensions compared to single-arm robots
+- **Control Space**:
+  - *Joint space*: Actions directly control robot joint angles
+  - *Task space*: Actions control end-effector/TCP pose (position + orientation)
+- **Action Type**:
+  - *Absolute*: Target positions
+  - *Deltas*: Relative changes from current position
+- **Gripper**: Typically remains absolute (target position) even when other dimensions use deltas
+- For custom robots with 7D state (6D pose + 1D gripper) and 3 cameras, see the Livenex example in `examples/libero/`
