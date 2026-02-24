@@ -188,13 +188,13 @@ def create_torch_dataset(
     # LeRobot's API accepts a separate `root` path, but this repo historically passed `repo_id` only.
     # When a filesystem path is passed as `repo_id`, older behavior can fall back to Hugging Face API
     # validation and fail. We avoid that by splitting a valid synthetic repo id from the local root path.
-    dataset_root = None
+    dataset_root = pathlib.Path(data_config.local_repo_root).expanduser().resolve() if data_config.local_repo_root else None
     dataset_repo_id = repo_id
     repo_path = pathlib.Path(repo_id).expanduser()
-    if repo_path.is_absolute() or repo_id.startswith("./") or repo_id.startswith("../"):
+    if dataset_root is None and (repo_path.is_absolute() or repo_id.startswith("./") or repo_id.startswith("../")):
         dataset_root = repo_path.resolve()
         dataset_repo_id = f"local/{dataset_root.name}"
-    elif pathlib.Path(repo_id).exists():
+    elif dataset_root is None and pathlib.Path(repo_id).exists():
         dataset_root = pathlib.Path(repo_id).resolve()
         dataset_repo_id = f"local/{dataset_root.name}"
 

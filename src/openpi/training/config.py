@@ -67,6 +67,9 @@ class AssetsConfig:
 class DataConfig:
     # LeRobot repo id. If None, fake data will be created.
     repo_id: str | None = None
+    # Optional local filesystem path for LeRobot dataset contents. When set, LeRobot metadata/data are read from this
+    # path while `repo_id` remains a valid Hugging Face dataset id for version resolution/fallback.
+    local_repo_root: str | None = None
     # Directory within the assets directory containing the data assets.
     asset_id: str | None = None
     # Contains precomputed normalization stats. If None, normalization will not be performed.
@@ -949,8 +952,11 @@ _CONFIGS = [
             action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
         data=LeRobotSO101DataConfig(
-            repo_id="/workspace/openpi/data/pick-place-yellow_cube",
-            base_config=DataConfig(prompt_from_task=True),
+            repo_id="zuichucai/pick-place-yellow_cube",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                local_repo_root="/workspace/openpi/data/pick-place-yellow_cube",
+            ),
             default_prompt="pick up the yellow cube and place it",
         ),
         batch_size=128,
@@ -976,8 +982,11 @@ _CONFIGS = [
             discrete_state_input=False,
         ),
         data=LeRobotSO101DataConfig(
-            repo_id="/workspace/openpi/data/pick-place-yellow_cube",
-            base_config=DataConfig(prompt_from_task=True),
+            repo_id="zuichucai/pick-place-yellow_cube",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                local_repo_root="/workspace/openpi/data/pick-place-yellow_cube",
+            ),
             default_prompt="pick up the yellow cube and place it",
         ),
         batch_size=32,
