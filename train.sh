@@ -7,6 +7,9 @@ set -euo pipefail
 # Usage:
 #   ./train.sh
 #   RESET_STATE=1 ./train.sh   # rerun all steps from scratch (ignores saved step state)
+#   # Download this script from:
+#   #   https://github.com/Paul-LiPu/openpi/blob/exp/finetune/train.sh
+#   curl -L https://raw.githubusercontent.com/Paul-LiPu/openpi/exp/finetune/train.sh -o train.sh && chmod +x train.sh && ./train.sh
 #
 # W&B setup (optional):
 #   wandb login
@@ -23,6 +26,8 @@ set -euo pipefail
 #   CONFIG_NAME=pi05_so101_low_mem_finetune \
 #   EXP_NAME=my_yellow_cube_lora \
 #   XLA_MEM_FRACTION=0.9 \
+#   PYTHON_VERSION=3.11 \
+#   VENV_DIR=.venv \
 #   STATE_FILE=.openpi-train-state \
 #   RESET_STATE=1 \
 #   ./train.sh
@@ -38,6 +43,8 @@ XLA_MEM_FRACTION="${XLA_MEM_FRACTION:-0.9}"
 LOG_INTERVAL="${LOG_INTERVAL:-10}"
 SAVE_INTERVAL="${SAVE_INTERVAL:-100}"
 KEEP_PERIOD="${KEEP_PERIOD:-2500}"
+PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
+VENV_DIR="${VENV_DIR:-.venv}"
 CALLER_DIR="${PWD}"
 STATE_FILE="${STATE_FILE:-${CALLER_DIR}/.${REPO_DIR}.train_state}"
 RESET_STATE="${RESET_STATE:-0}"
@@ -99,6 +106,12 @@ clone_dataset_step() {
   cd ..
 }
 
+setup_python_venv_step() {
+  # Create/update a local venv with a Python version compatible with tensorflow-cpu==2.15.0.
+  uv python install "${PYTHON_VERSION}"
+  uv venv --python "${PYTHON_VERSION}" "${VENV_DIR}"
+}
+
 run_step "clone_repo" "Clone repo: ${REPO_URL}" clone_repo_step
 
 cd "${REPO_DIR}"
@@ -109,11 +122,17 @@ run_step "install_git_xet" "Install git-xet (required for Hugging Face git-xet r
   bash -lc 'curl -sSfL https://hf.co/git-xet/install.sh | sh'
 
 run_step "clone_dataset" "Clone yellow-cube dataset into data/${DATASET_DIR_NAME}" clone_dataset_step
+run_step "setup_python_venv" "Create local Python ${PYTHON_VERSION} virtualenv at ${VENV_DIR}" setup_python_venv_step
+
+# Ensure subsequent uv commands use the local project venv instead of a caller-provided system/managed venv.
+# shellcheck disable=SC1090
+source "${VENV_DIR}/bin/activate"
 
 echo
 echo "==> Setup complete"
 echo "Repo root: $(pwd)"
 echo "Dataset path: $(pwd)/data/${DATASET_DIR_NAME}"
+echo "Python venv: $(pwd)/${VENV_DIR}"
 echo "State file: ${STATE_FILE}"
 echo
 echo "Running: GIT_LFS_SKIP_SMUDGE=1 uv pip install -e . --group rlds --group dev"
