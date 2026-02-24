@@ -191,6 +191,21 @@ def _normalize_scalar(value: Any) -> Any:
     return value
 
 
+def _json_compatible(value: Any) -> Any:
+    """Recursively convert numpy/pandas values to JSON-serializable Python types."""
+    value = _normalize_scalar(value)
+    if isinstance(value, dict):
+        return {str(k): _json_compatible(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_compatible(v) for v in value]
+    if hasattr(value, "tolist") and not isinstance(value, (str, bytes)):
+        try:
+            return _json_compatible(value.tolist())
+        except Exception:
+            pass
+    return value
+
+
 def unflatten_stats_record(flat_record: dict[str, Any]) -> dict[str, Any]:
     """Convert {'stats/a/b': x} style keys back into nested dicts under 'stats'."""
     nested: dict[str, Any] = {}
@@ -201,8 +216,8 @@ def unflatten_stats_record(flat_record: dict[str, Any]) -> dict[str, Any]:
         cur = nested
         for part in parts[:-1]:
             cur = cur.setdefault(part, {})
-        cur[parts[-1]] = _normalize_scalar(value)
-    return nested.get("stats", {})
+        cur[parts[-1]] = _json_compatible(value)
+    return _json_compatible(nested.get("stats", {}))
 
 
 def build_legacy_episodes_jsonl(episodes_df: pd.DataFrame, task_map: dict[int, str] | None = None) -> list[dict[str, Any]]:
