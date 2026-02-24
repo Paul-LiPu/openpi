@@ -423,6 +423,19 @@ def _ffmpeg_trim(src: Path, dst: Path, start_ts: float, end_ts: float) -> None:
     subprocess.run(reencode_cmd, check=True)
 
 
+def _find_grouped_video_file(root: Path, camera: str, chunk_idx: int, file_idx: int) -> Path | None:
+    candidates = [
+        root / "videos" / camera / f"chunk-{chunk_idx:03d}" / f"file_{file_idx:03d}.mp4",
+        root / "videos" / camera / f"chunk-{chunk_idx:03d}" / f"file-{file_idx:03d}.mp4",
+        root / "videos" / camera / f"chunk-{chunk_idx:03d}" / f"file_{file_idx}.mp4",
+        root / "videos" / camera / f"chunk-{chunk_idx:03d}" / f"file-{file_idx}.mp4",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
 def convert_videos(root: Path, new_root: Path, episodes_df: pd.DataFrame) -> int:
     video_keys = _detect_video_keys(episodes_df)
     if not video_keys:
@@ -439,9 +452,12 @@ def convert_videos(root: Path, new_root: Path, episodes_df: pd.DataFrame) -> int
                 continue
             if pd.isna(row.get(chunk_col)):
                 continue
-            src = root / "videos" / camera / f"chunk-{int(row[chunk_col]):03d}" / f"file_{int(row[file_col]):03d}.mp4"
-            if not src.exists():
-                raise FileNotFoundError(src)
+            src = _find_grouped_video_file(root, camera, int(row[chunk_col]), int(row[file_col]))
+            if src is None:
+                raise FileNotFoundError(
+                    f"Could not resolve grouped video for camera={camera} chunk={int(row[chunk_col])} "
+                    f"file={int(row[file_col])} under {root / 'videos' / camera}"
+                )
             dst = episode_video_path(new_root, ep_idx, camera)
             _ffmpeg_trim(src, dst, float(row[from_col]), float(row[to_col]))
 
