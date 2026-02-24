@@ -48,10 +48,17 @@ def write_json(path: Path, obj: dict[str, Any]) -> None:
         f.write("\n")
 
 
-def load_parquet_tree(dir_path: Path) -> pd.DataFrame:
-    parquet_files = sorted(dir_path.rglob("*.parquet"))
+def load_parquet_tree(path: Path) -> pd.DataFrame:
+    """Load parquet data from either a single file or a directory tree of parquet shards."""
+    if path.is_file():
+        parquet_files = [path]
+    elif path.is_dir():
+        parquet_files = sorted(path.rglob("*.parquet"))
+    else:
+        parquet_files = []
+
     if not parquet_files:
-        raise FileNotFoundError(f"No parquet files found under {dir_path}")
+        raise FileNotFoundError(f"No parquet files found at/under {path}")
     frames = [pd.read_parquet(p) for p in parquet_files]
     return pd.concat(frames, ignore_index=True)
 
@@ -85,28 +92,34 @@ def episode_video_path(root: Path, ep_idx: int, camera: str) -> Path:
 
 
 def read_tasks_v30(root: Path) -> list[dict[str, Any]]:
-    tasks_dir = root / "meta" / "tasks"
-    df = load_parquet_tree(tasks_dir)
+    tasks_path = root / "meta" / "tasks"
+    if not tasks_path.exists():
+        tasks_path = root / "meta" / "tasks.parquet"
+    df = load_parquet_tree(tasks_path)
     if "task_index" not in df.columns or "task" not in df.columns:
-        raise ValueError(f"Unexpected tasks schema under {tasks_dir}: columns={list(df.columns)}")
+        raise ValueError(f"Unexpected tasks schema at {tasks_path}: columns={list(df.columns)}")
     df = df[["task_index", "task"]].drop_duplicates().sort_values("task_index")
     return [{"task_index": int(r.task_index), "task": str(r.task)} for r in df.itertuples(index=False)]
 
 
 def read_episodes_v30(root: Path) -> pd.DataFrame:
-    episodes_dir = root / "meta" / "episodes"
-    df = load_parquet_tree(episodes_dir)
+    episodes_path = root / "meta" / "episodes"
+    if not episodes_path.exists():
+        episodes_path = root / "meta" / "episodes.parquet"
+    df = load_parquet_tree(episodes_path)
     if "episode_index" not in df.columns:
-        raise ValueError(f"Unexpected episodes schema under {episodes_dir}: missing episode_index")
+        raise ValueError(f"Unexpected episodes schema at {episodes_path}: missing episode_index")
     return df.sort_values("episode_index").reset_index(drop=True)
 
 
 def read_episodes_stats_v30(root: Path) -> pd.DataFrame | None:
-    stats_dir = root / "meta" / "episodes_stats"
-    if not stats_dir.exists():
+    stats_path = root / "meta" / "episodes_stats"
+    if not stats_path.exists():
+        stats_path = root / "meta" / "episodes_stats.parquet"
+    if not stats_path.exists():
         return None
     try:
-        df = load_parquet_tree(stats_dir)
+        df = load_parquet_tree(stats_path)
     except FileNotFoundError:
         return None
     if "episode_index" not in df.columns:
