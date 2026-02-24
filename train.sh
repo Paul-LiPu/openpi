@@ -50,6 +50,9 @@ CALLER_DIR="${PWD}"
 STATE_FILE="${STATE_FILE:-${CALLER_DIR}/.${REPO_DIR}.train_state}"
 RESET_STATE="${RESET_STATE:-0}"
 
+# Force Python version for subprocesses/tools that may inspect PYTHON_VERSION.
+export PYTHON_VERSION=3.11
+
 mkdir -p "$(dirname "${STATE_FILE}")"
 if [[ "${RESET_STATE}" == "1" ]]; then
   rm -f "${STATE_FILE}"
