@@ -949,7 +949,7 @@ _CONFIGS = [
             action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
         data=LeRobotSO101DataConfig(
-            repo_id="data/pick-place-yellow_cube",
+            repo_id="/workspace/openpi/data/pick-place-yellow_cube",
             base_config=DataConfig(prompt_from_task=True),
             default_prompt="pick up the yellow cube and place it",
         ),
@@ -976,7 +976,7 @@ _CONFIGS = [
             discrete_state_input=False,
         ),
         data=LeRobotSO101DataConfig(
-            repo_id="data/pick-place-yellow_cube",
+            repo_id="/workspace/openpi/data/pick-place-yellow_cube",
             base_config=DataConfig(prompt_from_task=True),
             default_prompt="pick up the yellow cube and place it",
         ),
