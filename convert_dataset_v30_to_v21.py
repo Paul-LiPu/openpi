@@ -278,6 +278,40 @@ def build_legacy_info(info_v30: dict[str, Any], data_chunks: int, total_videos: 
     return info
 
 
+def _find_grouped_data_file(root: Path, chunk_idx: int, file_idx: int) -> Path | None:
+    """Resolve a v3 data parquet path across common layout variants."""
+    candidates = [
+        root / "data" / f"chunk-{chunk_idx:03d}" / f"file_{file_idx:03d}.parquet",
+        root / "data" / f"chunk-{chunk_idx:03d}" / f"file-{file_idx:03d}.parquet",
+        root / "data" / f"file_{file_idx:03d}.parquet",
+        root / "data" / f"file-{file_idx:03d}.parquet",
+        root / "data" / f"chunk-{chunk_idx:03d}" / f"file_{file_idx}.parquet",
+        root / "data" / f"chunk-{chunk_idx:03d}" / f"file-{file_idx}.parquet",
+        root / "data" / f"file_{file_idx}.parquet",
+        root / "data" / f"file-{file_idx}.parquet",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+def _find_episode_source_data_file(root: Path, ep_idx: int) -> Path | None:
+    """Resolve a per-episode parquet file path across legacy-ish layout variants."""
+    candidates = [
+        root / "data" / episode_chunk_dir(ep_idx) / f"episode_{ep_idx:06d}.parquet",
+        root / "data" / f"episode_{ep_idx:06d}.parquet",
+        root / "data" / episode_chunk_dir(ep_idx) / f"file_{ep_idx:03d}.parquet",
+        root / "data" / episode_chunk_dir(ep_idx) / f"file-{ep_idx:03d}.parquet",
+        root / "data" / f"file_{ep_idx:03d}.parquet",
+        root / "data" / f"file-{ep_idx:03d}.parquet",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
 def convert_data_files(root: Path, new_root: Path, episodes_df: pd.DataFrame) -> int:
     data_cols = {"data/chunk_index", "data/file_index", "dataset_from_index", "dataset_to_index", "episode_index"}
     missing = data_cols - set(episodes_df.columns)
@@ -286,11 +320,35 @@ def convert_data_files(root: Path, new_root: Path, episodes_df: pd.DataFrame) ->
 
     grouped = episodes_df.groupby(["data/chunk_index", "data/file_index"], sort=True)
     for (chunk_idx, file_idx), group in tqdm.tqdm(grouped, desc="convert data files"):
-        src = root / "data" / f"chunk-{int(chunk_idx):03d}" / f"file_{int(file_idx):03d}.parquet"
-        if not src.exists():
-            raise FileNotFoundError(src)
-        df = pd.read_parquet(src)
+        src = _find_grouped_data_file(root, int(chunk_idx), int(file_idx))
         group = group.sort_values("dataset_from_index")
+
+        # Fallback: some datasets already store per-episode parquet files despite v3 metadata.
+        if src is None:
+            all_episode_files_present = True
+            for _, row in group.iterrows():
+                ep_idx = int(row["episode_index"])
+                ep_src = _find_episode_source_data_file(root, ep_idx)
+                if ep_src is None:
+                    all_episode_files_present = False
+                    break
+            if all_episode_files_present:
+                for _, row in group.iterrows():
+                    ep_idx = int(row["episode_index"])
+                    ep_src = _find_episode_source_data_file(root, ep_idx)
+                    if ep_src is None:
+                        raise FileNotFoundError(f"Missing per-episode parquet for episode {ep_idx}")
+                    out = episode_data_path(new_root, ep_idx)
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(ep_src, out)
+                continue
+
+            raise FileNotFoundError(
+                f"Could not resolve grouped data parquet for chunk={int(chunk_idx)} file={int(file_idx)} "
+                f"under {root / 'data'}"
+            )
+
+        df = pd.read_parquet(src)
         file_start = int(group["dataset_from_index"].min())
         for _, row in group.iterrows():
             ep_idx = int(row["episode_index"])
