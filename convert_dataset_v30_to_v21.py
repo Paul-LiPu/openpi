@@ -206,6 +206,14 @@ def _json_compatible(value: Any) -> Any:
     return value
 
 
+def _stats_leaf_compatible(value: Any) -> Any:
+    """Ensure stats leaves deserialize to >=1D arrays in LeRobot v2.1."""
+    value = _json_compatible(value)
+    if isinstance(value, (int, float, bool)):
+        return [value]
+    return value
+
+
 def unflatten_stats_record(flat_record: dict[str, Any]) -> dict[str, Any]:
     """Convert {'stats/a/b': x} style keys back into nested dicts under 'stats'."""
     nested: dict[str, Any] = {}
@@ -216,7 +224,7 @@ def unflatten_stats_record(flat_record: dict[str, Any]) -> dict[str, Any]:
         cur = nested
         for part in parts[:-1]:
             cur = cur.setdefault(part, {})
-        cur[parts[-1]] = _json_compatible(value)
+        cur[parts[-1]] = _stats_leaf_compatible(value)
     return _json_compatible(nested.get("stats", {}))
 
 
