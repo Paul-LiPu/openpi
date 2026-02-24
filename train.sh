@@ -5,6 +5,7 @@ set -euo pipefail
 # then runs the README-based training steps.
 #
 # Usage:
+# RESET_STATE=1 PYTHON_VERSION=3.11 ./train.sh
 #   ./train.sh
 #   RESET_STATE=1 ./train.sh   # rerun all steps from scratch (ignores saved step state)
 #   # Download this script from:
@@ -26,7 +27,6 @@ set -euo pipefail
 #   CONFIG_NAME=pi05_so101_low_mem_finetune \
 #   EXP_NAME=my_yellow_cube_lora \
 #   XLA_MEM_FRACTION=0.9 \
-#   PYTHON_VERSION=3.11 \
 #   VENV_DIR=.venv \
 #   STATE_FILE=.openpi-train-state \
 #   RESET_STATE=1 \
@@ -43,7 +43,6 @@ XLA_MEM_FRACTION="${XLA_MEM_FRACTION:-0.9}"
 LOG_INTERVAL="${LOG_INTERVAL:-10}"
 SAVE_INTERVAL="${SAVE_INTERVAL:-100}"
 KEEP_PERIOD="${KEEP_PERIOD:-2500}"
-PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
 VENV_DIR="${VENV_DIR:-.venv}"
 CALLER_DIR="${PWD}"
 STATE_FILE="${STATE_FILE:-${CALLER_DIR}/.${REPO_DIR}.train_state}"
@@ -108,8 +107,8 @@ clone_dataset_step() {
 
 setup_python_venv_step() {
   # Create/update a local venv with a Python version compatible with tensorflow-cpu==2.15.0.
-  uv python install "${PYTHON_VERSION}"
-  uv venv --python "${PYTHON_VERSION}" "${VENV_DIR}"
+  uv python install 3.11
+  uv venv --python 3.11 "${VENV_DIR}"
 }
 
 run_step "clone_repo" "Clone repo: ${REPO_URL}" clone_repo_step
@@ -122,7 +121,7 @@ run_step "install_git_xet" "Install git-xet (required for Hugging Face git-xet r
   bash -lc 'curl -sSfL https://hf.co/git-xet/install.sh | sh'
 
 run_step "clone_dataset" "Clone yellow-cube dataset into data/${DATASET_DIR_NAME}" clone_dataset_step
-run_step "setup_python_venv" "Create local Python ${PYTHON_VERSION} virtualenv at ${VENV_DIR}" setup_python_venv_step
+run_step "setup_python_venv" "Create local Python 3.11 virtualenv at ${VENV_DIR}" setup_python_venv_step
 
 # Ensure subsequent uv commands use the local project venv instead of a caller-provided system/managed venv.
 # shellcheck disable=SC1090
