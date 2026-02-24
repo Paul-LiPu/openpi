@@ -125,10 +125,25 @@ install_system_deps_step() {
     echo "apt-get not found. Please install PyAV/ffmpeg build deps manually (pkg-config, ffmpeg, ffmpeg dev libs, build-essential)."
     return 1
   fi
-  apt-get update
-  apt-get install -y \
+  local sudo_cmd=""
+  if [[ "$(id -u)" -ne 0 ]]; then
+    sudo_cmd="sudo"
+  fi
+
+  # Install helper for add-apt-repository if needed.
+  ${sudo_cmd} apt-get update
+  ${sudo_cmd} apt-get install -y software-properties-common
+
+  # Install FFmpeg 7 from UbuntuHandbook PPA (required by PyAV source build path in this environment).
+  ${sudo_cmd} add-apt-repository -y ppa:ubuntuhandbook1/ffmpeg7
+  ${sudo_cmd} apt-get update
+  ${sudo_cmd} apt-get install -y ffmpeg
+  ffmpeg -version | head -1
+
+  # Install build tools and FFmpeg development headers for PyAV.
+  ${sudo_cmd} apt-get update
+  ${sudo_cmd} apt-get install -y \
     pkg-config \
-    ffmpeg \
     build-essential \
     python3-dev \
     libavformat-dev \
