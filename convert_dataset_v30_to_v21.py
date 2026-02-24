@@ -228,6 +228,41 @@ def unflatten_stats_record(flat_record: dict[str, Any]) -> dict[str, Any]:
     return _json_compatible(nested.get("stats", {}))
 
 
+def _normalize_image_stat_shape_3x1x1(value: Any) -> Any:
+    """Normalize image stats leaves to LeRobot v2.1 expected shape (3,1,1)."""
+    value = _json_compatible(value)
+    if not isinstance(value, list):
+        return value
+    if len(value) != 3:
+        return value
+
+    normalized_channels = []
+    for channel in value:
+        if not isinstance(channel, list):
+            normalized_channels.append([[channel]])
+            continue
+        if len(channel) == 1 and not isinstance(channel[0], list):
+            normalized_channels.append([[channel[0]]])
+            continue
+        normalized_channels.append(channel)
+    return normalized_channels
+
+
+def _normalize_stats_for_v21(stats: dict[str, Any], info: dict[str, Any] | None) -> dict[str, Any]:
+    if info is None:
+        return stats
+    features = info.get("features", {})
+    image_like_keys = {k for k, ft in features.items() if isinstance(ft, dict) and ft.get("dtype") in {"image", "video"}}
+    for key in image_like_keys:
+        feature_stats = stats.get(key)
+        if not isinstance(feature_stats, dict):
+            continue
+        for stat_name in ("min", "max", "mean", "std"):
+            if stat_name in feature_stats:
+                feature_stats[stat_name] = _normalize_image_stat_shape_3x1x1(feature_stats[stat_name])
+    return stats
+
+
 def build_legacy_episodes_jsonl(episodes_df: pd.DataFrame, task_map: dict[int, str] | None = None) -> list[dict[str, Any]]:
     required = {"episode_index", "length"}
     missing = required - set(episodes_df.columns)
@@ -258,7 +293,7 @@ def build_legacy_episodes_jsonl(episodes_df: pd.DataFrame, task_map: dict[int, s
 
 
 def build_legacy_episode_stats_jsonl(
-    episodes_df: pd.DataFrame, episodes_stats_df: pd.DataFrame | None
+    episodes_df: pd.DataFrame, episodes_stats_df: pd.DataFrame | None, info: dict[str, Any] | None = None
 ) -> list[dict[str, Any]]:
     source_df = episodes_stats_df if episodes_stats_df is not None else episodes_df
     stat_cols = [c for c in source_df.columns if c.startswith("stats/")]
@@ -268,6 +303,7 @@ def build_legacy_episode_stats_jsonl(
     rows = []
     for _, row in source_df[["episode_index", *stat_cols]].iterrows():
         stats = unflatten_stats_record(row.to_dict())
+        stats = _normalize_stats_for_v21(stats, info)
         rows.append({"episode_index": int(row["episode_index"]), "stats": stats})
     rows.sort(key=lambda x: x["episode_index"])
     return rows
@@ -501,7 +537,7 @@ def convert_dataset(repo_id: str, root: str | Path | None = None, force: bool = 
     write_jsonlines(new_root / "meta" / "episodes.jsonl", build_legacy_episodes_jsonl(episodes_df, task_map=task_map))
     write_jsonlines(
         new_root / "meta" / "episodes_stats.jsonl",
-        build_legacy_episode_stats_jsonl(episodes_df, episodes_stats_df),
+        build_legacy_episode_stats_jsonl(episodes_df, episodes_stats_df, info=info_v30),
     )
 
     stats_json = dataset_root / "meta" / "stats.json"
