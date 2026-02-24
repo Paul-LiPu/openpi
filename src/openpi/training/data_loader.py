@@ -1,4 +1,6 @@
 from collections.abc import Iterator, Sequence
+import importlib
+import inspect
 import logging
 import multiprocessing
 import os
@@ -8,7 +10,6 @@ from typing import Literal, Protocol, SupportsIndex, TypeVar
 
 import jax
 import jax.numpy as jnp
-import lerobot.common.datasets.lerobot_dataset as lerobot_dataset
 import numpy as np
 import torch
 
@@ -18,6 +19,51 @@ from openpi.training.droid_rlds_dataset import DroidRldsDataset
 import openpi.transforms as _transforms
 
 T_co = TypeVar("T_co", covariant=True)
+
+
+def _import_lerobot_dataset_module():
+    """Import LeRobot dataset module across v2/v3 package layouts."""
+    module_paths = (
+        "lerobot.common.datasets.lerobot_dataset",  # older layout
+        "lerobot.datasets.lerobot_dataset",  # newer layout
+    )
+    last_err = None
+    for module_path in module_paths:
+        try:
+            return importlib.import_module(module_path)
+        except ModuleNotFoundError as e:
+            last_err = e
+    raise ModuleNotFoundError(
+        "Could not import LeRobot dataset module. Tried: "
+        + ", ".join(module_paths)
+        + ". Install a compatible `lerobot` package."
+    ) from last_err
+
+
+def _call_with_supported_kwargs(fn, /, *args, **kwargs):
+    """Call a function/class ctor with only kwargs supported by its signature."""
+    sig = inspect.signature(fn)
+    supported_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters and v is not None}
+    return fn(*args, **supported_kwargs)
+
+
+def _extract_task_mapping(dataset_meta) -> dict[int, str]:
+    """Normalize LeRobot task metadata across versions into {task_index: task}."""
+    tasks = getattr(dataset_meta, "tasks", None)
+    if tasks is None:
+        return {}
+    if isinstance(tasks, dict):
+        return {int(k): str(v) for k, v in tasks.items()}
+    # Newer versions may return a list/sequence of row dicts.
+    try:
+        mapping = {}
+        for row in tasks:
+            if isinstance(row, dict) and "task_index" in row and "task" in row:
+                mapping[int(row["task_index"])] = str(row["task"])
+        return mapping
+    except TypeError:
+        return {}
+    return {}
 
 
 class Dataset(Protocol[T_co]):
@@ -152,17 +198,28 @@ def create_torch_dataset(
         dataset_root = pathlib.Path(repo_id).resolve()
         dataset_repo_id = f"local/{dataset_root.name}"
 
-    dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(dataset_repo_id, root=dataset_root)
-    dataset = lerobot_dataset.LeRobotDataset(
+    lerobot_dataset = _import_lerobot_dataset_module()
+    dataset_meta = _call_with_supported_kwargs(
+        lerobot_dataset.LeRobotDatasetMetadata,
         dataset_repo_id,
         root=dataset_root,
-        delta_timestamps={
-            key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
-        },
+    )
+    delta_timestamps = {key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys}
+    dataset = _call_with_supported_kwargs(
+        lerobot_dataset.LeRobotDataset,
+        dataset_repo_id,
+        root=dataset_root,
+        delta_timestamps=delta_timestamps,
     )
 
     if data_config.prompt_from_task:
-        dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
+        task_mapping = _extract_task_mapping(dataset_meta)
+        if not task_mapping:
+            raise ValueError(
+                "prompt_from_task=True but task metadata could not be extracted from LeRobot dataset metadata. "
+                "Disable prompt_from_task or provide a compatible LeRobot version."
+            )
+        dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(task_mapping)])
 
     return dataset
 
