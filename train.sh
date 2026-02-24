@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Bootstraps a fresh clone and yellow-cube LeRobot dataset for pi0.5 LoRA fine-tuning,
-# then runs the README-based training steps.
+# converts LeRobot v3 datasets to v2.1 if needed, then runs the README-based training steps.
 #
 # Usage:
 # RESET_STATE=1 PYTHON_VERSION=3.11 ./train.sh
@@ -155,6 +155,38 @@ install_system_deps_step() {
     libswresample-dev
 }
 
+convert_dataset_to_v21_step() {
+  local dataset_path="data/${DATASET_DIR_NAME}"
+  local info_path="${dataset_path}/meta/info.json"
+  if [[ ! -f "${info_path}" ]]; then
+    echo "Dataset metadata not found at ${info_path}; skipping conversion."
+    return 0
+  fi
+
+  local codebase_version
+  codebase_version="$(
+    python3 - "${info_path}" <<'PY'
+import json
+import sys
+with open(sys.argv[1]) as f:
+    print(json.load(f).get("codebase_version", "unknown"))
+PY
+  )"
+
+  if [[ "${codebase_version}" == "v2.1" ]]; then
+    echo "Dataset already in LeRobot v2.1 format; skipping conversion."
+    return 0
+  fi
+
+  if [[ "${codebase_version}" != "v3.0" ]]; then
+    echo "Unsupported dataset codebase_version=${codebase_version}; expected v3.0 or v2.1."
+    return 1
+  fi
+
+  echo "Converting LeRobot dataset from v3.0 to v2.1: ${dataset_path}"
+  python3 convert_dataset_v30_to_v21.py --root data --repo-id "${DATASET_DIR_NAME}"
+}
+
 run_step "clone_repo" "Clone repo: ${REPO_URL}" clone_repo_step
 
 cd "${REPO_DIR}"
@@ -181,6 +213,10 @@ echo "State file: ${STATE_FILE}"
 echo
 echo "Running: GIT_LFS_SKIP_SMUDGE=1 uv pip install -e . --group rlds --group dev"
 run_step "install_deps" "Install Python dependencies" env GIT_LFS_SKIP_SMUDGE=1 uv pip install -e . --group rlds --group dev
+
+echo "Running: python3 convert_dataset_v30_to_v21.py --root data --repo-id ${DATASET_DIR_NAME} (if dataset is v3.0)"
+run_step "convert_dataset_v30_to_v21" "Convert LeRobot dataset to v2.1 format if needed" \
+  convert_dataset_to_v21_step
 
 echo "Running: uv run scripts/compute_norm_stats.py --config-name ${CONFIG_NAME}"
 run_step "compute_norm_stats" "Compute norm stats (${CONFIG_NAME})" \
